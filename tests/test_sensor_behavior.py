@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 from types import MappingProxyType, SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
-from homeassistant.const import CONF_USERNAME, UnitOfEnergy
+from homeassistant.const import CONF_USERNAME, STATE_UNAVAILABLE, UnitOfEnergy
 
 from custom_components.china_southern_power_grid_stat.const import (
     CONF_ELE_ACCOUNTS,
     DATA_KEY_LAST_UPDATE_DAY,
     DOMAIN,
+    STATE_UPDATE_UNCHANGED,
     SUFFIX_BAL,
     SUFFIX_CURRENT_LADDER_REMAINING_KWH,
     SUFFIX_CURRENT_LADDER_TARIFF,
@@ -86,6 +87,66 @@ def test_device_identifier_is_scoped_to_config_entry():
     )
 
     assert sensor.device_info["identifiers"] == {(DOMAIN, "entry-id:account")}
+
+
+def test_unavailable_is_applied_before_state_is_written():
+    coordinator = make_coordinator()
+    coordinator.data = {
+        "account": {SUFFIX_YESTERDAY_KWH: STATE_UNAVAILABLE}
+    }
+    sensor = CSGEnergySensor(coordinator, "account", SUFFIX_YESTERDAY_KWH)
+    sensor._attr_available = True
+    availability_when_written = []
+    sensor.async_write_ha_state = Mock(
+        side_effect=lambda: availability_when_written.append(sensor._attr_available)
+    )
+
+    sensor._handle_coordinator_update()
+
+    assert availability_when_written == [False]
+
+
+def test_successful_value_recovers_unavailable_sensor():
+    coordinator = make_coordinator()
+    coordinator.data = {"account": {SUFFIX_YESTERDAY_KWH: 12.34}}
+    sensor = CSGEnergySensor(coordinator, "account", SUFFIX_YESTERDAY_KWH)
+    sensor._attr_available = False
+    sensor.async_write_ha_state = Mock()
+
+    sensor._handle_coordinator_update()
+
+    assert sensor._attr_available is True
+    assert sensor.native_value == 12.34
+    sensor.async_write_ha_state.assert_called_once_with()
+
+
+def test_unchanged_value_preserves_sensor_availability_and_skips_write():
+    coordinator = make_coordinator()
+    coordinator.data = {
+        "account": {SUFFIX_YESTERDAY_KWH: STATE_UPDATE_UNCHANGED}
+    }
+    sensor = CSGEnergySensor(coordinator, "account", SUFFIX_YESTERDAY_KWH)
+    sensor._attr_available = False
+    sensor.async_write_ha_state = Mock()
+
+    sensor._handle_coordinator_update()
+
+    assert sensor._attr_available is False
+    sensor.async_write_ha_state.assert_not_called()
+
+
+def test_month_merge_keeps_usage_when_cost_endpoint_is_unavailable():
+    usage = [{"date": "2026-09-21", "kwh": 8.5}]
+
+    by_day, kwh = CSGCoordinator.merge_by_day_data(
+        by_day_from_cost=STATE_UNAVAILABLE,
+        kwh_from_cost=STATE_UNAVAILABLE,
+        by_day_from_usage=usage,
+        kwh_from_usage=8.5,
+    )
+
+    assert by_day == usage
+    assert kwh == 8.5
 
 
 @pytest.mark.asyncio

@@ -213,12 +213,9 @@ class CSGBaseSensor(
 
         if new_native_value == STATE_UNAVAILABLE:
             _LOGGER.debug("%s data is unavailable", self.unique_id)
-            self.async_write_ha_state()
             self._attr_available = False
+            self.async_write_ha_state()
             return
-
-        # from this point the value is available
-        self._attr_available = True
 
         if new_native_value == STATE_UPDATE_UNCHANGED:
             # no update for this sensor, skip
@@ -226,6 +223,7 @@ class CSGBaseSensor(
             return
 
         # from this point, `new_native_value` is a true value
+        self._attr_available = True
         self._attr_native_value = new_native_value
 
         if self._extra_state_attributes_key:
